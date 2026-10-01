@@ -188,6 +188,20 @@ courseId 登记在 `scripts/papers/subject-courses.conf`，换学校需重新登
 | `scripts/scan_exam_cells.js <out.jsonl> [--exams ..] [--pages N] [--allow-partial]` | **全站 考试×学科 格子普查**（试卷/发布/状态/阅卷模式，直连接口，含完整性闸门） | 否 |
 | `scripts/gap_report.py <cells.jsonl> <out.md> [out.xlsx]` | 由普查结果出「三类缺口台账」（未绑定 / 已绑未发布 / 仍是考试阅卷） | 否 |
 | `scripts/api.js creds\|selftest` / `scripts/murmur3.js` | /v2 直连客户端（fl-sec-sign 签名复刻） | 否 |
+| `scripts/upload_task_scores.js <items.jsonl> <log.jsonl> [--dry] [--yes] [--source qt]` | **批量「导入成绩」**（后台异步；结果看左下角消息） | **是** |
+| `scripts/mark_plan.js <out.json> [--allow-partial]` | **只读**：全站扫「开始阅卷」可点性（按 `scan/progress` 的 `submitCount`，无需浏览器） | 否 |
+| `scripts/start_mark.js <plan.json> <log.jsonl> [--dry] [--yes] [--limit N] [--start N]` | **批量点「开始阅卷」**（`GET /exam/subject/<esId>/mark/`；每条执行前重读 status，幂等） | **是** |
+| `scripts/end_mark.js [--dry] [--yes] [--limit N] [--start N] [--only …] [--log f]` | **批量「结束阅卷」**（`POST /exam/subject/<esId>/finish/`；目标=当前 status 47，每条复核，幂等） | **是** |
+| `scripts/show_answer.js [--action show\|hide] [--dry] [--yes] [--limit N] [--only …] [--log f]` | **批量「公布成绩／撤回成绩」**（`POST /exam/<examId>/show-answer/`；目标=status 111 且 `showAnswerAt` 方向匹配） | **是** |
+| `scripts/lookup_papers.js <subjectId> "<考试名>" [--pages N] [--json]` | **只读**：全平台试卷库检索（`GET /v2/papers/?kw=&subjectId=&scope=exam`）。退出码 3 = 库中无精确同名卷 | 否 |
+
+### ⚠️ 「导入成绩」的真实语义（2026-10-01 实测，务必先读）
+
+**`POST /v2/tasks/import/data/`（source=qt）实测只把「学生名单」写进任务，不写分数** ——
+导入前后 323 个任务逐格 diff 零变化。**成功的判据看左下角消息**：
+`GET /v2/inbox/trainer/`（page 走 params）→ `{"success":{"<文件名>":"导入学生: N"}}`（文案不含分数）。
+站内「分数」的来源是**答题卡**（`score` 里 `hasPhoto=true` + 照片 URL）；全站有分数的任务极少。
+排查细节、已排除因素、核对脚本、替代入口 → **`references/import-scores-semantics.md`**。
 
 ### 批量只读任务：优先直连 /v2 接口（省事、稳）
 
@@ -227,8 +241,39 @@ node $SK/scripts/download_exam_templates.js 2434 /tmp/tpl --dedup
 |---|---|---|
 | `0` | 未绑定试卷 | 无试卷 |
 | `11` | 已发布 | 考试阅卷 |
-| `15` | 已发布 | 任务阅卷 |
-| `111` | 已发布 **且阅卷进度 100%** | 任务阅卷（此状态下界面「阅卷分配」按钮被禁用） |
+| `15` | 已发布 | 任务阅卷（**未开始阅卷**） |
+| `47` | 已发布 **已开始阅卷（未结束）** | 任务阅卷（界面按钮为「结束阅卷」） |
+| `111` | 已发布 **且已结束阅卷** | 任务阅卷（界面按钮为「重新阅卷」，「阅卷分配」被禁用） |
+
+> `111` 只代表**阅卷结束**，不代表公布过 —— 公布与否另看该科 `showAnswerAt`。
+
+### 开始阅卷 → 结束阅卷 → 公布成绩（完整生命周期）
+
+| 动作 | 接口 | 成功判定 | 状态变化 |
+|---|---|---|---|
+| 开始阅卷 | `GET /v2/exam/subject/<esId>/mark/` | 200 + `{}` | `15 → 47` |
+| 结束阅卷 | `POST /v2/exam/subject/<esId>/finish/` | 200 + `{"detail":null}` | `47 → 111` |
+| 公布成绩 | `POST /v2/exam/<examId>/show-answer/` body `{examSubjectId, action:"show"}` | **201** + 空 body | `showAnswerAt` → 当前时间 |
+
+两个**不用开浏览器**的判据：
+
+1. **「开始阅卷」能不能点** = 有没有交卷数据：`GET /v2/exam/subject/<esId>/scan/progress/`
+   里任一班 `submitCount > 0`（153/153 与界面一致）。
+2. **按钮是「公布成绩」还是「撤回成绩」** = 该科 `showAnswerAt`：未来占位时间（`2029-09-12…`）＝未公布；
+   真实过去时间＝已公布。
+
+```bash
+SK=~/.workbuddy/skills/fuulea-teaching-cloud
+node $SK/scripts/mark_plan.js   /tmp/plan.json                                    # ① 只读出可点清单（含完整性闸门）
+node $SK/scripts/start_mark.js  /tmp/plan.json /tmp/log1.jsonl --limit 2 --yes
+node $SK/scripts/start_mark.js  /tmp/plan.json /tmp/log1.jsonl --yes              # 幂等：非 15 自动跳过
+node $SK/scripts/end_mark.js                 --limit 2 --yes --log /tmp/log2.jsonl  # ② 结束阅卷（目标=status 47）
+node $SK/scripts/end_mark.js                 --yes --log /tmp/log2.jsonl
+node $SK/scripts/show_answer.js --action show --limit 2 --yes --log /tmp/log3.jsonl # ③ 公布成绩
+node $SK/scripts/show_answer.js --action show --yes --log /tmp/log3.jsonl
+```
+
+状态位、接口细节、2026-10-01 全站执行记录与踩坑 → **`references/mark-lifecycle.md`**。
 
 > 想一次拿齐「未绑定 / 已绑未发布 / 阅卷模式」三类缺口，直接用：
 

@@ -76,6 +76,26 @@ node $SK/scripts/api.js creds lyyz      # ⚠️ 必须带别名，见下
 | 考试下的学科与班级 | `GET /v2/exam/<examId>/subjects/` → `data[].subject` / `data[].classrooms[]` |
 | 教师信息（含所属学科、管理年级） | `GET /v2/auth/teachers/<teacherId>/` |
 | **成绩上传模板（全通教育 班级对照表）** | `GET /v2/tasks/<taskId>/class-list/` → xlsx |
+| **试卷库检索（考试范围卷）** | `GET /v2/papers/?kw=<关键词>&subjectId=<sid>&scope=exam&page=N&pageSize=N` |
+
+### 试卷库 `/v2/papers/`（2026-10-01 解出参数）
+
+参数结构从前端 `chunk-JQSFN3X7.js` 的 `fl-set-template` 组件（考试详情页「关联已有试卷」弹窗）解出：
+
+```js
+// 组件里：onPaperSearch(e){ this.searchPaperChange$.next({kw:e, subjectId:this.examSubject.subject.id, scope:"exam"}) }
+// 服务里：getPaperLists(i){ return this.doGet("/papers/", i) }
+```
+
+- **`kw`** 模糊匹配卷名（跨校全平台可见，能搜到外校卷）。
+- **`scope`** 取值：`exam`(考试卷) / `all` / `course` / `task` / `exercise` / `blackboard` / `tk` / `special`。
+  课程侧「关联试卷」用 `scope:"course"`（见 `chunk-ZQ3Q7YRM.js`）。
+- **`subjectId`** 必带。**不带任何参数会命中全库**（`count` 数十万，无意义）。
+- ⚠️ 参数名**不是** `keyword` / `gradeId` —— 用错会 `500`（不是 400），别硬试。
+- 已知同类接口：`GET /v2/papers/<paperId>/`（卷详情，可带 `taskId`）、`GET /v2/papers/<paperId>/coordinates/`。
+- 封装脚本：`node $SK/scripts/lookup_papers.js <subjectId> "<考试名>"`，
+  退出码 `0` = 精确同名命中 / `3` = 库中无此卷。
+  **判读必须带对照**：先搜一份已知在库的卷确认检索能命中，再搜目标卷。
 
 ### 坑
 

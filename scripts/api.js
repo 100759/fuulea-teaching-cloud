@@ -80,6 +80,22 @@ class Api {
     let json = null; try { json = JSON.parse(text); } catch (e) {}
     return { status: res.status, json, text };
   }
+  async put(pathname, obj = {}, params = {}) {
+    const res = await this.request('PUT', pathname, {
+      params, body: JSON.stringify(obj), extraHeaders: { 'Content-Type': 'application/json' },
+    });
+    const text = await res.text();
+    let json = null; try { json = JSON.parse(text); } catch (e) {}
+    return { status: res.status, json, text };
+  }
+  async del(pathname, obj = {}, params = {}) {
+    const res = await this.request('DELETE', pathname, {
+      params, body: JSON.stringify(obj), extraHeaders: { 'Content-Type': 'application/json' },
+    });
+    const text = await res.text();
+    let json = null; try { json = JSON.parse(text); } catch (e) {}
+    return { status: res.status, json, text };
+  }
   // 取二进制（如下载模板）
   async getBinary(pathname, params = {}) {
     const res = await this.raw(pathname, params);
