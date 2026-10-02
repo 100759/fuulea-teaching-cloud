@@ -190,6 +190,7 @@ courseId 登记在 `scripts/papers/subject-courses.conf`，换学校需重新登
 | `scripts/audit_bind_all.js [out.json]` | **只读**：全站绑卷一致性核查（考试学期/年级 vs 所绑卷名，抓"绑错卷"；退出码 5 = 有可疑格）。发现可疑后**先判责、先问用户**，见 `references/bind-papers-workflow.md` §10 | 否 |
 | `scripts/api.js creds\|selftest` / `scripts/murmur3.js` | /v2 直连客户端（fl-sec-sign 签名复刻） | 否 |
 | `scripts/upload_task_scores.js <items.jsonl> <log.jsonl> [--dry] [--yes] [--source qt]` | **批量「导入成绩」**（后台异步；结果看左下角消息） | **是** |
+| `scripts/inbox_receipts.js [--limit N] [--since <UTC>] [--grep <考试名>] [--expect N] [--out f]` | **只读**：核对上传到底被平台收下没（自动解双层转义 + 标出非我方上传）。退出码 3 = 有拒收回执 | 否 |
 | `scripts/mark_plan.js <out.json> [--allow-partial]` | **只读**：全站扫「开始阅卷」可点性（按 `scan/progress` 的 `submitCount`，无需浏览器） | 否 |
 | `scripts/start_mark.js <plan.json> <log.jsonl> [--dry] [--yes] [--limit N] [--start N]` | **批量点「开始阅卷」**（`GET /exam/subject/<esId>/mark/`；每条执行前重读 status，幂等） | **是** |
 | `scripts/end_mark.js [--dry] [--yes] [--limit N] [--start N] [--only …] [--log f]` | **批量「结束阅卷」**（`POST /exam/subject/<esId>/finish/`；目标=当前 status 47，每条复核，幂等） | **是** |
@@ -209,6 +210,16 @@ courseId 登记在 `scripts/papers/subject-courses.conf`，换学校需重新登
   回执人数与文件行数逐一相等。
 - **幂等陷阱**：`upload_task_scores.js` 只按 log 里 `ok:true` 跳过，而 `ok:true` = 接口返回 `{}`（已提交），
   **不等于平台收下了** ⇒ 重传「曾被拒」的任务**必须换新的 log 文件**，否则静默 SKIP 且日志仍报 `fail=0`。
+- **核对回执用成品脚本**：`node scripts/inbox_receipts.js [--since <UTC时间>] [--grep <考试名>] [--expect N]`。
+  它把三个坑做成了机制 —— ① 自动解 `content` 的**双层转义**（不解则 `includes('汉字')` 恒 false，
+  会误判「没有这条回执」）；② 成功/失败判据是「`error` 里有没有内容」
+  （**被拒时 `success` 是空对象 `{}`**，用 `if (j.success)` 会把拒收误判成成功）；
+  ③ 顺手标出**平台原件命名法**（`<考试名> <学科>班级对照表 (1).xlsx`）的条目 ⇒ 疑似**非我方**上传，
+  是发现「本机还有另一路在写」的线索之一。
+  退出码：`0` 通过 / `3` 有拒收回执 / `4` `--expect` 不符 / `5` 凭据失效。
+  > 2026-10-02 首次全量跑：168 条导入回执里 **6 条失败**（3 条 `分数格式错误`、
+  > 1 条 `学生班级未找到` 列出 20 名学生、1 条 `缺少题号`）—— 这些是**历史遗留**，
+  > 说明此前有若干份从未真正导入成功，不只是 10-01 那一次。
 
 ### 批量只读任务：优先直连 /v2 接口（省事、稳）
 
@@ -241,6 +252,37 @@ node $SK/scripts/download_exam_templates.js 2434 /tmp/tpl --dedup
 
 `subjects` 接口 **不带 auth 头也能 200**（实测 `credentials:'omit'` 同样返回），
 但 `marker` 接口**必须**带签名头。
+
+#### ⚠️ 考试ID 必须现查，别凭记忆（2026-10-02 踩过）
+
+**同一学期的几场考试 ID 是不连号的，极易混淆。** 动手前先跑一次：
+
+```bash
+node $SK/scripts/api.js get '/v2/exam/?role=grade&name=&page=1'   # 或用 api.js 逐页拉全量清单
+```
+
+龙岩一中 2024 级已确认的对应关系（**仅供对照，仍以现查为准**）：
+
+| 考试ID | 名称 | 备注 |
+|---|---|---|
+| `29180` | 第一学期高一**第2次月考** | 容易和 29181 混 |
+| `29181` | 第一学期高一期中考试 | 对应源表 `…高一期中考试(半期考联考).xlsx` |
+| `29182` | 第一学期高一期末考试 | |
+| `29185` | 第二学期高一期中考试 | 跨学期，差一位数 |
+
+> 混淆的后果不是报错，而是**把操作做到别的考试上**（绑卷/上传尤其危险）。
+> 2026-10-02 差点按 29180 去传 29181 的数据，靠现查才发现。
+
+#### ⚠️ JWT 约 6 小时过期（2026-10-02 实测）
+
+拿过凭据后**放半天再用就会 401**，报错五花八门（`先确认已登录`、`uid 非法` 等误导性文案）。
+判据：任何 `/v2` 请求批量 401 ⇒ 直接重登，不要去排查别的地方。
+
+```bash
+bash $SK/scripts/login.sh lyyz && node $SK/scripts/api.js creds lyyz && node $SK/scripts/api.js selftest
+```
+
+`selftest` 输出 `SELFTEST OK` 才算凭据可用。**大批量任务开始前顺手跑一次**，能省掉中途失败。
 
 **`status` 语义**（2026-10-01 全站 153 格实测，与界面读数 100% 一致）：
 

@@ -149,7 +149,8 @@ node snapshot_scores.js items.jsonl before.jsonl   # 记 n / withScore / withFin
 
 ⇒ **凡是导入结果是看 inbox 回执才知道的（本接口全是），re-run 就得换新的 log 文件**，
 否则脚本会打 `SKIP — 已在 log 中成功过` 并静默跳过，日志还显示 `fail=0`。
-（2026-10-02 重传时改用 `/tmp/fuulea/upload2026/exam29185/log.jsonl` 才正常提交。）
+做法：给每批用带批次标识的新 log（如 `log_<考试>_<学科>_<日期>.jsonl`），
+**别复用上一批的**。上传完再用 §5.4 的 `inbox_receipts.js` 核对，别只看 `fail=0`。
 
 ⚠️ **区分两个作用域，别把规矩用错了地方**（2026-10-02 校准）：
 
@@ -201,7 +202,15 @@ assert not empty_cells, f"有 {len(empty_cells)} 个空格，平台会整份拒�
 
 ## 5.4 正确读 inbox 回执（否则会误判"没有这条记录"）
 
-三个必须知道的细节，少一个就会得出错误结论（2026-10-02 复盘时踩过）：
+> ✅ **别手写这段解析了** —— 已沉淀为成品脚本，坑全部做成了机制：
+> ```bash
+> node scripts/inbox_receipts.js [--limit N] [--since <UTC时间>] [--grep <考试名>] [--expect N] [--out f]
+> ```
+> 退出码：`0` 通过 / `3` 有拒收回执 / `4` `--expect` 不符 / `5` 凭据失效（401）。
+> 2026-10-02 首次全量跑：168 条导入回执里 **6 条失败**（3 条 `分数格式错误`、
+> 1 条 `学生班级未找到` 列出 20 名学生、1 条 `缺少题号`）—— 说明**历史上有多份从未真正导入成功**。
+
+四个必须知道的细节，少一个就会得出错误结论（2026-10-02 复盘时踩过）：
 
 1. **`content` 是「双层转义」的字符串**。`x.content` 取出来长这样：
    `{"success": {"2024-2025\u7b2c\u4e00\u5b66\u671f...": "\u5bfc\u5165\u5b66\u751f: 116"}}`
@@ -210,15 +219,38 @@ assert not empty_cells, f"有 {len(empty_cells)} 个空格，平台会整份拒�
    ```js
    // ❌ 恒 false —— 会把"明明存在的回执"判成不存在
    String(x.content).includes('第一学期高一第1次月考')
-   // ✅ 先解一层，再 JSON.parse
-   const dec = s => { try { return JSON.parse('"' + String(s).replace(/"/g,'\\"') + '"'); } catch { return String(s); } };
+   // ✅ 解两层：先脱外层转义，再 JSON.parse（解析出的中文仍是 \uXXXX，需再解一层才可 includes）
+   const dec = s => {
+     let t = String(s);
+     for (let i = 0; i < 2; i++) {
+       try { const v = JSON.parse('"' + t.replace(/"/g, '\\"') + '"'); if (typeof v !== 'string') return v; t = v; }
+       catch { break; }
+     }
+     return t;
+   };
    const obj = JSON.parse(dec(x.content));
    ```
 
-2. **时间字段叫 `createAt`**（不是 `createdAt`/`createTime`），ISO 字符串带 `+00:00`（UTC），
+2. ⚠️ **成功/失败的判据是「`error` 里有没有内容」，不是「`success` 是否为真」**。
+   解码后的结构是 `{success: {文件名: "导入学生: N"}, error: {}, title: 文件名}` ——
+   **被拒收时 `success` 是空对象 `{}`**，而 `error` 才有内容：
+
+   | 回执 | 含义 |
+   |---|---|
+   | `{"success":{"英语.xlsx":"导入学生: 116"},"error":{}}` | ✅ 成功导入 116 人 |
+   | `{"success":{},"error":{"分数格式错误[行,列]":"[4,I]、[4,J]…"}}` | ❌ **整份拒收，一名学生都没导入** |
+
+   ```js
+   // ✅ 唯一正确写法
+   const bad = j.error && Object.keys(j.error).length > 0;
+   // ❌ 写 if (j.success) → 被拒收时 success 是 {}，会被误判成「成功」（10-01 那份英语就这么漏过）
+   // ❌ 只扫顶层键 → 成功时的文件名/人数在 j.success 里，会把 168 条全判成失败
+   ```
+
+3. **时间字段叫 `createAt`**（不是 `createdAt`/`createTime`），ISO 字符串带 `+00:00`（UTC），
    比北京时间**小 8 小时** —— 直接当本地时间读会差一天。
 
-3. **靠文件名区分"是谁传的"**（用于判断某条回执是否本批作业所为）：
+4. **靠文件名区分"是谁传的"**（用于判断某条回执是否本批作业所为）：
 
    | 文件名形态 | 来源 |
    |---|---|
