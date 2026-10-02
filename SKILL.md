@@ -187,6 +187,7 @@ courseId 登记在 `scripts/papers/subject-courses.conf`，换学校需重新登
 | `scripts/papers/diff_bindings.py` | 前后矩阵 diff | 否 |
 | `scripts/scan_exam_cells.js <out.jsonl> [--exams ..] [--pages N] [--allow-partial]` | **全站 考试×学科 格子普查**（试卷/发布/状态/阅卷模式，直连接口，含完整性闸门） | 否 |
 | `scripts/gap_report.py <cells.jsonl> <out.md> [out.xlsx]` | 由普查结果出「三类缺口台账」（未绑定 / 已绑未发布 / 仍是考试阅卷） | 否 |
+| `scripts/audit_bind_all.js [out.json]` | **只读**：全站绑卷一致性核查（考试学期/年级 vs 所绑卷名，抓"绑错卷"；退出码 5 = 有可疑格）。发现可疑后**先判责、先问用户**，见 `references/bind-papers-workflow.md` §10 | 否 |
 | `scripts/api.js creds\|selftest` / `scripts/murmur3.js` | /v2 直连客户端（fl-sec-sign 签名复刻） | 否 |
 | `scripts/upload_task_scores.js <items.jsonl> <log.jsonl> [--dry] [--yes] [--source qt]` | **批量「导入成绩」**（后台异步；结果看左下角消息） | **是** |
 | `scripts/mark_plan.js <out.json> [--allow-partial]` | **只读**：全站扫「开始阅卷」可点性（按 `scan/progress` 的 `submitCount`，无需浏览器） | 否 |
