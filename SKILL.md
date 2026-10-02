@@ -204,6 +204,12 @@ courseId 登记在 `scripts/papers/subject-courses.conf`，换学校需重新登
 站内「分数」的来源是**答题卡**（`score` 里 `hasPhoto=true` + 照片 URL）；全站有分数的任务极少。
 排查细节、已排除因素、核对脚本、替代入口 → **`references/import-scores-semantics.md`**。
 
+- **收下条件（2026-10-02 已验证，可当判据用）**：模板 `小题分` 表**题号格有任何空格 → 整份拒收**
+  （`success:{}` + `分数格式错误[行,列]`，一名学生都不导入）。反之「空格 = 0」就必被收下，
+  回执人数与文件行数逐一相等。
+- **幂等陷阱**：`upload_task_scores.js` 只按 log 里 `ok:true` 跳过，而 `ok:true` = 接口返回 `{}`（已提交），
+  **不等于平台收下了** ⇒ 重传「曾被拒」的任务**必须换新的 log 文件**，否则静默 SKIP 且日志仍报 `fail=0`。
+
 ### 批量只读任务：优先直连 /v2 接口（省事、稳）
 
 **只要能 GET 到数据，就别用浏览器。** 详见 `references/api-direct.md`；一句话版：
